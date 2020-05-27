@@ -1,0 +1,309 @@
+--SQL Utils
+
+
+-- INsert from select
+Select * into new_table  from  old_table 
+
+    sys.tables
+
+-- Check procedures
+	select * from sys.procedures where name like '%Retencao%'
+
+--Check all tables
+  select * from sys.sysobjects where type = 'U' and name like '%THFIN%'
+
+  select t.name as table_name,
+    schema_name(schema_id) as schema_name,
+    c.name as column_name
+from sys.tables as t
+inner join sys.columns c on t.object_id = c.object_id
+where c.name like '%margem%'
+order by schema_name, table_name;
+
+---- Check modify date table
+SELECT
+     name, object_id, create_date, modify_date
+FROM
+ 
+----- Check any collumn in any table
+
+SELECT      COLUMN_NAME AS 'ColumnName'
+            ,TABLE_NAME AS  'TableName'
+FROM        INFORMATION_SCHEMA.COLUMNS
+WHERE       COLUMN_NAME LIKE '%CPF%'
+ORDER BY    TableName
+            ,ColumnName;
+
+---Find Most Expensive Queries---
+SELECT TOP 10 SUBSTRING(qt.TEXT, (qs.statement_start_offset/2)+1,
+((CASE qs.statement_end_offset
+WHEN -1 THEN DATALENGTH(qt.TEXT)
+ELSE qs.statement_end_offset
+END - qs.statement_start_offset)/2)+1),
+qs.execution_count,
+qs.total_logical_reads, qs.last_logical_reads,
+qs.total_logical_writes, qs.last_logical_writes,
+qs.total_worker_time,
+qs.last_worker_time,
+qs.total_elapsed_time/1000000 total_elapsed_time_in_S,
+qs.last_elapsed_time/1000000 last_elapsed_time_in_S,
+qs.last_execution_time,
+qp.query_plan
+FROM sys.dm_exec_query_stats qs
+CROSS APPLY sys.dm_exec_sql_text(qs.sql_handle) qt
+CROSS APPLY sys.dm_exec_query_plan(qs.plan_handle) qp
+ORDER BY qs.total_logical_reads DESC -- logical reads
+-- ORDER BY qs.total_logical_writes DESC -- logical writes
+-- ORDER BY qs.total_worker_time DESC -- CPU time
+
+
+--Pivot
+CREATE TABLE #TMP_Telefone (
+            id        INT,
+            Fone    INT
+            );
+
+ 
+
+INSERT INTO #TMP_Telefone 
+VALUES  (1,30265988),
+        (2,21315569),
+        (3,9857663),
+        (4,4598966),
+        (5,4564888)
+
+ 
+
+SELECT 'Fone' AS TEL,
+[1],[2],[3],[4],[5]
+FROM (SELECT id, Fone FROM #TMP_Telefone) AS Origem
+PIVOT (
+MAX(Fone)
+FOR id IN ([1],[2],[3],[4],[5])
+) AS PivotTable
+
+
+---INDEX Stats
+
+SELECT
+       getdate() dttime_server,db_name() as dbname,
+       o.name as tablename,   i.name as indexname,
+       c.index_type_desc,       i.index_id,
+       user_seeks + user_scans + user_lookups as total_reads,
+       user_updates as total_writes,
+       (SELECT SUM(p.rows)
+       FROM sys.partitions p
+       WHERE p.index_id = s.index_id
+       AND s.object_id = p.object_id) as number_of_rows,
+       c.avg_fragmentation_in_percent,       c.fragment_count,
+       page_count,
+       s.user_seeks,s.user_scans, s.user_lookups, s.user_updates,
+       s.last_user_lookup,
+       s.last_user_scan,        s.last_user_seek,
+       CONVERT(TIME,GETDATE() - last_user_lookup),
+       CONVERT(TIME,GETDATE() - last_user_lookup),
+       CONVERT(TIME,GETDATE() - coalesce(last_user_scan,getdate()))
+FROM sys.indexes i
+    INNER JOIN sys.objects o ON i.object_id = o.object_id
+    INNER JOIN (select * from SYS.dm_db_index_physical_stats(DB_ID(),null,null,null,null)) as c on c.object_id=i.object_id and c.index_id=i.index_id
+    LEFT JOIN sys.dm_db_index_usage_stats s ON i.index_id = s.index_id AND s.object_id = i.object_id and s.database_id=DB_ID()
+WHERE  1=1
+  --and i.name = 'PK_AVISOS'
+  --AND o.name = 'AVISOS'
+ORDER BY avg_fragmentation_in_percent desc,total_reads DESC
+
+
+---- IO stats
+
+SELECT  DB_NAME(a.database_id) AS [Database Name] ,
+    b.name + N' [' + b.type_desc COLLATE SQL_Latin1_General_CP1_CI_AS + N']' AS [Logical File Name] ,
+    UPPER(SUBSTRING(b.physical_name, 1, 2)) AS [Drive] ,
+    CAST(( ( a.size_on_disk_bytes / 1024.0 ) / (1024.0*1024.0) ) AS DECIMAL(9,2)) AS [Size (GB)] ,
+    a.io_stall_read_ms AS [Total IO Read Stall] ,
+    a.num_of_reads AS [Total Reads] ,
+    CASE WHEN a.num_of_bytes_read > 0
+        THEN CAST(a.num_of_bytes_read/1024.0/1024.0/1024.0 AS NUMERIC(23,1))
+        ELSE 0
+    END AS [GB Read],
+    CAST(a.io_stall_read_ms / ( 1.0 * a.num_of_reads ) AS INT) AS [Avg Read Stall (ms)] ,
+    CASE
+        WHEN b.type = 0 THEN 30 /* data files */
+        WHEN b.type = 1 THEN 5 /* log files */
+        ELSE 0
+    END AS [Max Rec Read Stall Avg],
+    a.io_stall_write_ms AS [Total IO Write Stall] ,
+    a.num_of_writes [Total Writes] ,
+    CASE WHEN a.num_of_bytes_written > 0
+        THEN CAST(a.num_of_bytes_written/1024.0/1024.0/1024.0 AS NUMERIC(23,1))
+        ELSE 0
+    END AS [GB Written],
+    CAST(a.io_stall_write_ms / ( 1.0 * a.num_of_writes ) AS INT) AS [Avg Write Stall (ms)] ,
+    CASE
+        WHEN b.type = 0 THEN 30 /* data files */
+        WHEN b.type = 1 THEN 2 /* log files */
+        ELSE 0
+    END AS [Max Rec Write Stall Avg] ,
+    b.physical_name AS [Physical File Name],
+    CASE
+        WHEN b.name = 'tempdb' THEN 'N/A'
+        WHEN b.type = 1 THEN 'N/A' /* log files */
+        ELSE 'PAGEIOLATCH*'
+    END AS [Read-Related Wait Stat],
+    CASE
+        WHEN b.type = 1 THEN 'WRITELOG' /* log files */
+        WHEN b.name = 'tempdb' THEN 'xxx' /* tempdb data files */
+        WHEN b.type = 0 THEN 'ASYNC_IO_COMPLETION' /* data files */
+        ELSE 'xxx'
+    END AS [Write-Related Wait Stat],
+    GETDATE() AS [Sample Time],
+    b.type_desc
+FROM    sys.dm_io_virtual_file_stats(NULL, NULL) AS a
+        INNER JOIN sys.master_files AS b ON a.file_id = b.file_id
+                                            AND a.database_id = b.database_id
+WHERE   a.num_of_reads > 0
+        AND a.num_of_writes > 0
+ORDER BY [Avg Write Stall (ms)] DESC
+
+
+
+----------- Memory Usage
+use master
+go
+       
+SELECT dobd.database_id,sdb.name,(COUNT(*) * 8.0) / 1024 AS MB
+  FROM sys.dm_os_buffer_descriptors AS dobd
+    join sys.databases sdb on sdb.database_id = dobd.database_id
+GROUP BY dobd.database_id,sdb.name
+union all
+SELECT '0','Total de memória usada',(COUNT(*) * 8.0) / 1024 AS MB
+  FROM sys.dm_os_buffer_descriptors AS dobd
+    join sys.databases sdb on sdb.database_id = dobd.database_id
+order by 3 DESC
+
+
+---SQL Config
+sp_configure
+
+--- Tunning Query, put this conf at the end o query, number 12 is the number of cpus
+OPTION (MAXDOP 12) 
+
+-- Query kill
+
+select 'Block' Tipo, sp.Spid, sp.Blocked, sp.Open_Tran, sp.Status, sp.waittime/1000 [waittime/seg],
+        sp.Last_Batch, sp.HostName, sp.NT_UserName, sp.[Program_Name],    
+       (SELECT [text] FROM sys.dm_exec_sql_text(sp.sql_handle)) Command,
+        db_name(dbid) DBName, sp.Loginame, sp.WaitResource, 
+        sp.hostprocess, sysjobs.name as Job_Name
+FROM    sys.sysprocesses sp
+LEFT JOIN msdb..sysjobs WITH (NOLOCK)
+ON  job_id LIKE '%' + SUBSTRING(PROGRAM_NAME, 55, 7) + '%'
+AND   PROGRAM_NAME LIKE  'SQLAgent%'
+AND  PROGRAM_NAME NOT LIKE 'SQLAgent - Job Manager%'
+AND  PROGRAM_NAME NOT LIKE 'SQLAgent - Alert Engine%'
+AND  PROGRAM_NAME NOT LIKE 'SQLAgent - Generic Refresher%'
+AND  PROGRAM_NAME NOT LIKE 'SQLAgent - Job invocation engine%'
+where spid in (select blocked from sys.sysprocesses where blocked > 0) and blocked = 0
+ 
+ 
+select 'Wait' Tipo, sp.Spid, sp.Blocked, sp.Open_Tran, sp.Status, sp.waittime/1000 [waittime/seg],
+        sp.Last_Batch, sp.HostName, sp.NT_UserName, sp.[Program_Name],    
+       (SELECT [text] FROM sys.dm_exec_sql_text(sp.sql_handle)) Command,
+        db_name(dbid) DBName, sp.Loginame, sp.WaitResource, 
+        sp.hostprocess, sysjobs.name as Job_Name
+FROM    sys.sysprocesses sp
+LEFT JOIN msdb..sysjobs WITH (NOLOCK)
+ON  job_id LIKE '%' + SUBSTRING(PROGRAM_NAME, 55, 7) + '%'
+AND   PROGRAM_NAME LIKE  'SQLAgent%'
+AND  PROGRAM_NAME NOT LIKE 'SQLAgent - Job Manager%'
+AND  PROGRAM_NAME NOT LIKE 'SQLAgent - Alert Engine%'
+AND  PROGRAM_NAME NOT LIKE 'SQLAgent - Generic Refresher%'
+AND  PROGRAM_NAME NOT LIKE 'SQLAgent - Job invocation engine%'
+where spid in (select spid from sys.sysprocesses where blocked > 0)
+ 
+ 
+ 
+ 
+USE master;  
+GO  
+EXEC sp_who;  
+GO
+ 
+ 
+
+ --kill 145
+ 
+ 
+ -----------------------------------------------///**///-------------------------------------------------------------
+--Processo para matar querys travadas rodando em um linded server
+--query para pegar os processos que usam linkedserver
+select 
+SUBSTRING(waitresource, CHARINDEX('=', waitresource)+1, (LEN(waitresource)  - CHARINDEX('=', waitresource))-1) Spid_Remoto,
+SUBSTRING(waitresource, 0, CHARINDEX(' ', waitresource)) Linked_Server,
+db_name(dbid)db,spid spid_local,status,blocked,last_batch,lastwaittype,waitresource,
+(select text FROM sys.dm_exec_sql_text(sys.sysprocesses.sql_handle)) as text,
+       hostname,loginame,sys.sysprocesses.sql_handle
+from SYS.SYSPROCESSES WITH(NOLOCK)
+where 1=1
+      and cmd!='TASK MANAGER' 
+      and status != 'background'
+      and lastwaittype = 'OLEDB'
+      and waitresource like '%SPID=%';
+-----------------------------------------------///**///-------------------------------------------------------------
+--PARA MATAR OS IDS REMOTOS
+Declare @dsql nvarchar(max)=''
+select @dsql = COALESCE(@dsql,'')+ 'kill ' + cast(spid as varchar(20)) + ';' from [SNAPFUNCAO].master.sys.sysprocesses
+            where spid = 'NN' --passar o spid do processo no linkedserver
+exec(@dsql) AT [SNAPFUNCAO] -- passar o nome do linkedserver onde a query está sendo executada
+----------------------------------------------///**///-------------------------------------------------------------
+
+
+Job alimenta grafana para consultar dados do banco de dados (memoria, cpu, users)
+begin
+SET ANSI_NULLS ON;
+SET QUOTED_IDENTIFIER ON;
+--performance checks
+WITH SQLProcessCPU
+AS(
+   SELECT  TOP(30) SQLProcessUtilization AS 'CPU_Usage', ROW_NUMBER() OVER(ORDER BY (SELECT NULL)) AS 'row_number'
+   FROM ( 
+         SELECT 
+           record.value('(./Record/@id)[1]', 'int') AS record_id,
+           record.value('(./Record/SchedulerMonitorEvent/SystemHealth/SystemIdle)[1]', 'int') AS [SystemIdle],
+           record.value('(./Record/SchedulerMonitorEvent/SystemHealth/ProcessUtilization)[1]', 'int') AS [SQLProcessUtilization], 
+           [timestamp] 
+         FROM ( 
+              SELECT [timestamp], CONVERT(xml, record) AS [record] 
+              FROM sys.dm_os_ring_buffers 
+              WHERE ring_buffer_type = N'RING_BUFFER_SCHEDULER_MONITOR' 
+              AND record LIKE '%<SystemHealth>%'
+              ) AS x 
+        ) AS y
+) 
+insert into CDO_DATABASE.dbo.Monitor
+SELECT SERVERPROPERTY('SERVERNAME') AS 'Instance'
+,(SELECT AVG(CPU_Usage) FROM SQLProcessCPU) AS 'SQLProcessUtilization'
+,(select max_target_memory_kb / 1024 as max_target_memory_mb from sys.dm_exec_query_resource_semaphores where resource_semaphore_id = 0) as 'max_target_memory_mb'
+,(select (max_target_memory_kb - available_memory_kb) / 1024 as used_memory_mb from sys.dm_exec_query_resource_semaphores where resource_semaphore_id = 0) as 'used_memory_mb'
+,(select count(*) QuerysWaitingResources from sys.dm_exec_query_memory_grants a where granted_memory_kb is null) as 'QuerysWaitingForResources'
+,(SELECT [cntr_value] FROM sys.dm_os_performance_counters WHERE [object_name] LIKE '%Manager%' AND [counter_name] = 'Page life expectancy') AS 'Page Life Expectancy'
+,case when 
+    (SELECT [cntr_value] FROM sys.dm_os_performance_counters WHERE [object_name] LIKE '%Manager%' AND [counter_name] = 'Page life expectancy') < 300 
+        then 'Low PLS' else 'Regular PLS'   end AS 'Page Life Expectancy State'
+,(SELECT  [cntr_value] as UserConnections FROM sys.dm_os_performance_counters WHERE counter_name = 'User Connections') as UserConnections
+,(select count(*) 'ActiveQuerys' from (select distinct spid from master.SYS.SYSPROCESSES WITH(NOLOCK) where cmd!='TASK MANAGER' and status != 'background' and status !='sleeping') as a) as 'ActiveQuerys'
+,dateadd(hour,3,GETDATE()) AS 'Dt'
+,(select top 1 convert(char(10),dateadd(s,datediff(s,last_batch,getdate()),'1900-1-1'),8) MostOldQuery 
+    from master.SYS.SYSPROCESSES WITH(NOLOCK) where cmd!='TASK MANAGER' and status != 'background' and status !='sleeping' order by 1 desc) as 'MostOldQuery'
+;
+end
+
+
+
+---- whoisactive
+sp_whoisactive @get_avg_time = 1
+
+sp_whoisactive @get_plans = 1
+
+--- get current user reporting service
+=Ucase(iif(InStr(User!UserID,"\") <> 0, Right(User!UserID, Len(User!UserID) - InStr(User!UserID,"\")), User!UserID))
+
